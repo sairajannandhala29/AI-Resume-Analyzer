@@ -1,0 +1,208 @@
+skill,category
+Python,Programming
+Java,Programming
+JavaScript,Programming
+TypeScript,Programming
+C,Programming
+C++,Programming
+C#,Programming
+R,Programming
+Go,Programming
+Rust,Programming
+PHP,Programming
+Ruby,Programming
+Kotlin,Programming
+Swift,Programming
+Dart,Programming
+Scala,Programming
+MATLAB,Programming
+SQL,Database
+MySQL,Database
+PostgreSQL,Database
+Oracle,Database
+SQLite,Database
+MongoDB,Database
+Redis,Database
+Cassandra,Database
+Microsoft SQL Server,Database
+PL/SQL,Database
+HTML,Web Development
+CSS,Web Development
+Bootstrap,Web Development
+Tailwind CSS,Web Development
+React,Web Development
+Angular,Web Development
+Vue.js,Web Development
+Next.js,Web Development
+Node.js,Web Development
+Express.js,Web Development
+jQuery,Web Development
+REST API,Web Development
+RESTful API,Web Development
+GraphQL,Web Development
+Web Development,Web Development
+FastAPI,Framework
+Flask,Framework
+Django,Framework
+Spring Boot,Framework
+Spring,Framework
+.NET,Framework
+ASP.NET,Framework
+Laravel,Framework
+Hibernate,Framework
+MERN,Framework
+MEAN,Framework
+Machine Learning,Artificial Intelligence
+Deep Learning,Artificial Intelligence
+Artificial Intelligence,Artificial Intelligence
+Natural Language Processing,Artificial Intelligence
+NLP,Artificial Intelligence
+Computer Vision,Artificial Intelligence
+Generative AI,Artificial Intelligence
+Large Language Models,Artificial Intelligence
+LLM,Artificial Intelligence
+Transformers,Artificial Intelligence
+Neural Networks,Artificial Intelligence
+Reinforcement Learning,Artificial Intelligence
+Scikit-learn,Machine Learning
+TensorFlow,Machine Learning
+PyTorch,Machine Learning
+Keras,Machine Learning
+XGBoost,Machine Learning
+LightGBM,Machine Learning
+Random Forest,Machine Learning
+Regression,Machine Learning
+Classification,Machine Learning
+Clustering,Machine Learning
+Pandas,Data Science
+NumPy,Data Science
+SciPy,Data Science
+Matplotlib,Data Visualization
+Seaborn,Data Visualization
+Plotly,Data Visualization
+Data Science,Data Science
+Data Analysis,Data Analytics
+Data Analytics,Data Analytics
+Statistical Analysis,Statistics
+Statistics,Statistics
+Probability,Statistics
+Hypothesis Testing,Statistics
+A/B Testing,Statistics
+Time Series Analysis,Data Science
+Data Cleaning,Data Science
+Data Preprocessing,Data Science
+Feature Engineering,Machine Learning
+Data Visualization,Data Visualization
+Power BI,Business Intelligence
+Tableau,Business Intelligence
+Excel,Business Intelligence
+Advanced Excel,Business Intelligence
+Power Query,Business Intelligence
+Power Pivot,Business Intelligence
+DAX,Business Intelligence
+Business Intelligence,Business Intelligence
+Git,Version Control
+GitHub,Version Control
+GitLab,Version Control
+Bitbucket,Version Control
+Version Control,Version Control
+Docker,DevOps
+Kubernetes,DevOps
+Jenkins,DevOps
+CI/CD,DevOps
+Continuous Integration,DevOps
+Continuous Deployment,DevOps
+Terraform,DevOps
+Ansible,DevOps
+Maven,Build Tools
+Gradle,Build Tools
+npm,Build Tools
+Yarn,Build Tools
+AWS,Cloud
+Microsoft Azure,Cloud
+Azure,Cloud
+Google Cloud,Cloud
+GCP,Cloud
+Amazon EC2,Cloud
+Amazon S3,Cloud
+AWS Lambda,Cloud
+Azure Functions,Cloud
+Google Cloud Functions,Cloud
+Cloud Computing,Cloud
+Linux,Operating Systems
+Windows,Operating Systems
+Unix,Operating Systems
+Shell Scripting,Operating Systems
+Bash,Operating Systems
+PowerShell,Operating Systems
+Agile,Methodology
+Scrum,Methodology
+Kanban,Methodology
+Jira,Project Management
+Confluence,Project Management
+Project Management,Project Management
+Software Development Life Cycle,Software Engineering
+SDLC,Software Engineering
+Object-Oriented Programming,Software Engineering
+OOP,Software Engineering
+Data Structures,Computer Science
+Algorithms,Computer Science
+Problem Solving,Soft Skills
+Debugging,Software Engineering
+Testing,Software Testing
+Unit Testing,Software Testing
+Integration Testing,Software Testing
+System Testing,Software Testing
+Test Automation,Software Testing
+Selenium,Software Testing
+Cypress,Software Testing
+JUnit,Software Testing
+PyTest,Software Testing
+Postman,API Testing
+API Testing,Software Testing
+Manual Testing,Software Testing
+Quality Assurance,Software Testing
+QA,Software Testing
+CRM,CRM
+CRM Implementation,CRM
+CRM Configuration,CRM
+Client Onboarding,CRM
+Customer Relationship Management,CRM
+Salesforce,CRM
+Microsoft Dynamics,CRM
+HubSpot,CRM
+Zoho CRM,CRM
+Handlebars.js,Web Development
+Handlebars,Web Development
+HTML to PDF,Document Processing
+PDF Generation,Document Processing
+Document Automation,Document Processing
+Template Development,Software Development
+GitHub Actions,DevOps
+API Development,Web Development
+API Integration,Web Development
+JSON,Web Development
+XML,Web Development
+OAuth,Security
+JWT,Security
+Authentication,Security
+Authorization,Security
+Cybersecurity,Security
+Agile Development,Methodology
+Communication,Soft Skills
+Teamwork,Soft Skills
+Leadership,Soft Skills
+Time Management,Soft Skills
+Critical Thinking,Soft Skills
+Analytical Thinking,Soft Skills
+Documentation,Soft Skills
+Technical Documentation,Soft Skills
+Client Communication,Soft Skills
+Customer Support,Customer Service
+Technical Support,Customer Service
+Troubleshooting,Software Engineering
+Research,General
+Microsoft Office,Productivity
+Word,Productivity
+PowerPoint,Productivity
+Google Workspace,Productivity

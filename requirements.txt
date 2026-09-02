@@ -1,0 +1,12 @@
+streamlit
+python-docx
+python-dotenv
+PyMuPDF
+sentence-transformers
+scikit-learn
+numpy
+google-genai
+openai
+spacy
+reportlab
+pytest

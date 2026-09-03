@@ -305,22 +305,76 @@ def _concept_match(first: Any, second: Any) -> bool:
         normalized = {_concept_key(x) for x in group}
         if a in normalized and b in normalized:
             return True
+    # Never treat a single-letter technology (for example C) as a
+    # substring of an unrelated multi-word skill.
+    if len(a) == 1 or len(b) == 1:
+        return False
+
     if len(a.split()) >= 2 and (a in b or b in a):
         return True
     return False
 
 
-def _text_has_concept(text: str, skill: str) -> bool:
+def _text_has_concept(
+    text: str,
+    skill: str,
+) -> bool:
+    """
+    Check whether a skill/concept is actually evidenced in the resume text.
+
+    Single-letter programming languages such as "C" are deliberately
+    conservative: an isolated "c" anywhere in normal prose must not count
+    as C programming.
+    """
     haystack = _concept_key(text)
     target = _concept_key(skill)
+
     if not haystack or not target:
         return False
-    if re.search(r"(?<![a-z0-9])" + re.escape(target) + r"(?![a-z0-9])", haystack):
+
+    # Single-letter programming language needs explicit evidence.
+    if target == "c":
+        explicit_patterns = [
+            r"\bc\s+program(?:ming)?\b",
+            r"\bc\s+language\b",
+            r"\bprogramming\s+in\s+c\b",
+            r"\blanguage\s*:\s*c\b",
+            r"\bc\s*,\s*c\+\+",
+            r"\bc\s*/\s*c\+\+",
+        ]
+        return any(
+            re.search(pattern, haystack, flags=re.IGNORECASE)
+            for pattern in explicit_patterns
+        )
+
+    # Exact phrase/token match.
+    if re.search(
+        r"(?<![a-z0-9])"
+        + re.escape(target)
+        + r"(?![a-z0-9])",
+        haystack,
+        flags=re.IGNORECASE,
+    ):
         return True
+
+    # Conservative concept-group matching.
     for group in CONCEPT_GROUPS:
-        normalized = {_concept_key(x) for x in group}
+        normalized = {
+            _concept_key(x)
+            for x in group
+        }
+
         if target in normalized:
-            return any(re.search(r"(?<![a-z0-9])" + re.escape(alias) + r"(?![a-z0-9])", haystack) for alias in normalized)
+            for alias in normalized:
+                if re.search(
+                    r"(?<![a-z0-9])"
+                    + re.escape(alias)
+                    + r"(?![a-z0-9])",
+                    haystack,
+                    flags=re.IGNORECASE,
+                ):
+                    return True
+
     return False
 
 
@@ -336,6 +390,46 @@ def _skills_match(
 # SKILL SCORE
 # ============================================================
 
+def _coerce_skill_list(value: Any) -> List[str]:
+    """Flatten common skill-container shapes into a clean list.
+
+    The application may receive skills as a list, tuple/set, a mapping such
+    as {category: [skills]}, or a mapping containing a nested `skills` key.
+    This normalization prevents the scorer from accidentally treating a
+    category name or serialized container as one skill.
+    """
+    if value is None:
+        return []
+
+    if isinstance(value, str):
+        return [value] if value.strip() else []
+
+    if isinstance(value, dict):
+        nested = []
+        for key in ("skills", "required_skills", "jd_skills", "extracted_skills"):
+            if key in value:
+                nested.extend(_coerce_skill_list(value[key]))
+        if nested:
+            return _unique_skills(nested)
+
+        flattened = []
+        for key, item in value.items():
+            # Category labels are not skills unless the value itself is empty.
+            if isinstance(item, (list, tuple, set, dict)):
+                flattened.extend(_coerce_skill_list(item))
+            elif isinstance(item, str) and item.strip():
+                flattened.append(item)
+        return _unique_skills(flattened)
+
+    if isinstance(value, (list, tuple, set)):
+        flattened = []
+        for item in value:
+            flattened.extend(_coerce_skill_list(item))
+        return _unique_skills(flattened)
+
+    return [str(value).strip()] if str(value).strip() else []
+
+
 def calculate_skill_score(
     resume_skills: List[str],
     job_skills: List[str],
@@ -348,8 +442,8 @@ def calculate_skill_score(
         score, matched_skills, missing_skills
     """
 
-    resume_skills = _unique_skills(resume_skills)
-    job_skills = _unique_skills(job_skills)
+    resume_skills = _coerce_skill_list(resume_skills)
+    job_skills = _coerce_skill_list(job_skills)
 
     if not job_skills:
         return 100.0, [], []
@@ -494,13 +588,18 @@ def calculate_keyword_score(
 # ============================================================
 
 def _extract_years(text: str) -> int:
+    """
+    Extract the minimum required experience from a job description.
+
+    Examples:
+        "2 to 4 years" -> 2
+        "2-4 years"    -> 2
+        "0-3 years"    -> 0
+        "2+ years"     -> 2
+        "6 years"      -> 6
+    """
     text = str(text or "").lower()
 
-    # Handle experience ranges such as:
-    # "2 to 4 years"
-    # "2-4 years"
-    # "2 – 4 years"
-    # For eligibility, the LOWER number is the minimum requirement.
     range_patterns = [
         r"\b(\d+)\s*(?:to|-|–|—)\s*(\d+)\s*years?\b",
         r"\bbetween\s+(\d+)\s+and\s+(\d+)\s*years?\b",
@@ -511,121 +610,322 @@ def _extract_years(text: str) -> int:
         if match:
             return int(match.group(1))
 
-    # Handle normal requirements such as:
-    # "2 years of experience"
-    # "2+ years experience"
-    # "minimum 2 years"
-    # "at least 2 years"
     patterns = [
-        r"(\d+)\s*\+?\s*years?\s+of\s+experience",
-        r"(\d+)\s*\+?\s*years?\s+experience",
-        r"minimum\s+(?:of\s+)?(\d+)\s*years?",
-        r"at\s+least\s+(\d+)\s*years?",
+        r"\bminimum\s+(?:of\s+)?(\d+)\s*years?\b",
+        r"\bat\s+least\s+(\d+)\s*years?\b",
+        r"\b(\d+)\s*\+?\s*years?\s+of\s+experience\b",
+        r"\b(\d+)\s*\+?\s*years?\s+experience\b",
+        r"\b(\d+)\s*\+?\s*years?\b",
     ]
 
     values = []
 
     for pattern in patterns:
         for match in re.finditer(pattern, text):
-            values.append(int(match.group(1)))
-
-    return max(values) if values else 0
-    """
-    Extract an explicitly stated required experience value.
-    """
-
-    text = str(text or "").lower()
-
-    patterns = [
-        r"(\d+)\s*\+?\s*years?\s+of\s+experience",
-        r"(\d+)\s*\+?\s*years?\s+experience",
-        r"minimum\s+(?:of\s+)?(\d+)\s*years?",
-        r"at\s+least\s+(\d+)\s*years?",
-    ]
-
-    values = []
-
-    for pattern in patterns:
-        for match in re.finditer(
-            pattern,
-            text,
-        ):
             try:
-                values.append(
-                    int(match.group(1))
-                )
-            except (
-                TypeError,
-                ValueError,
-            ):
-                pass
+                values.append(int(match.group(1)))
+            except (TypeError, ValueError):
+                continue
 
     return max(values) if values else 0
 
 
 def _extract_resume_experience_years(
     resume_text: str,
-) -> int:
+) -> float:
     """
-    Attempt to identify total experience years from resume text.
+    Estimate candidate work experience from actual work history.
 
-    Explicit statements such as "3 years of experience" are
-    preferred. Date ranges are used as a conservative fallback.
+    Priority:
+    1. Explicit total-experience statements.
+    2. Employment date ranges inside a real experience section.
+
+    Education, projects, certifications and other sections are ignored.
+    Overlapping employment periods are merged so the same time is not
+    counted twice.
+
+    Returns approximate years as a float, e.g. 3.6 years.
     """
 
-    text = str(resume_text or "").lower()
+    text = str(resume_text or "")
+    if not text.strip():
+        return 0.0
 
     explicit_patterns = [
-        r"(\d+)\s*\+?\s*years?\s+of\s+experience",
-        r"(\d+)\s*\+?\s*years?\s+experience",
-        r"total\s+experience\s*[:\-]?\s*(\d+)",
+        r"(\d+(?:\.\d+)?)\s*\+?\s*years?\s+of\s+experience",
+        r"(\d+(?:\.\d+)?)\s*\+?\s*years?\s+experience",
+        r"total\s+experience\s*[:\-]?\s*(\d+(?:\.\d+)?)",
     ]
 
-    values = []
+    explicit_values = []
 
     for pattern in explicit_patterns:
         for match in re.finditer(
             pattern,
             text,
+            flags=re.IGNORECASE,
         ):
             try:
-                values.append(
-                    int(match.group(1))
+                explicit_values.append(
+                    float(match.group(1))
                 )
-            except (
-                TypeError,
-                ValueError,
-            ):
-                pass
+            except (TypeError, ValueError):
+                continue
 
-    if values:
-        return max(values)
+    if explicit_values:
+        return max(explicit_values)
 
-    # Date-range fallback.
-    year_pattern = re.compile(
-        r"\b(20\d{2})\b"
+    lines = text.splitlines()
+
+    experience_headings = {
+        "experience",
+        "professional experience",
+        "work experience",
+        "employment",
+        "employment history",
+        "professional employment",
+        "work history",
+    }
+
+    stop_headings = {
+        "education",
+        "academic background",
+        "academic qualifications",
+        "projects",
+        "project experience",
+        "academic projects",
+        "technical skills",
+        "skills",
+        "skills summary",
+        "certifications",
+        "certificates",
+        "achievements",
+        "awards",
+        "languages",
+        "professional summary",
+        "summary",
+        "profile",
+        "objective",
+        "career objective",
+    }
+
+    def normalize_heading(value):
+        value = re.sub(
+            r"[^a-z0-9/& +#.-]",
+            " ",
+            value.lower(),
+        )
+        return re.sub(r"\s+", " ", value).strip()
+
+    start_index = None
+
+    for index, line in enumerate(lines):
+        if normalize_heading(line) in experience_headings:
+            start_index = index + 1
+            break
+
+    if start_index is None:
+        return 0.0
+
+    end_index = len(lines)
+
+    for index in range(start_index, len(lines)):
+        if normalize_heading(lines[index]) in stop_headings:
+            end_index = index
+            break
+
+    experience_lines = lines[start_index:end_index]
+
+    from datetime import datetime
+
+    now = datetime.now()
+    current_month = now.year * 12 + now.month
+
+    month_map = {
+        "jan": 1,
+        "january": 1,
+        "feb": 2,
+        "february": 2,
+        "mar": 3,
+        "march": 3,
+        "apr": 4,
+        "april": 4,
+        "may": 5,
+        "jun": 6,
+        "june": 6,
+        "jul": 7,
+        "july": 7,
+        "aug": 8,
+        "august": 8,
+        "sep": 9,
+        "sept": 9,
+        "september": 9,
+        "oct": 10,
+        "october": 10,
+        "nov": 11,
+        "november": 11,
+        "dec": 12,
+        "december": 12,
+    }
+
+    month_range_pattern = re.compile(
+        r"("
+        r"jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|"
+        r"may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|"
+        r"sep(?:t(?:ember)?)?|oct(?:ober)?|nov(?:ember)?|"
+        r"dec(?:ember)?"
+        r")"
+        r"\s+(20\d{2})"
+        r"\s*(?:-|–|—|to)\s*"
+        r"("
+        r"present|current|now|"
+        r"jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|"
+        r"may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|"
+        r"sep(?:t(?:ember)?)?|oct(?:ober)?|nov(?:ember)?|"
+        r"dec(?:ember)?"
+        r")"
+        r"(?:\s+(20\d{2}))?\b",
+        flags=re.IGNORECASE,
     )
 
-    years = []
+    year_range_pattern = re.compile(
+        r"\b(20\d{2})"
+        r"\s*(?:-|–|—|to)\s*"
+        r"(present|current|now|20\d{2})\b",
+        flags=re.IGNORECASE,
+    )
 
-    for match in year_pattern.finditer(text):
-        try:
-            years.append(
-                int(match.group(1))
+    intervals = []
+
+    def to_month(year, month):
+        return year * 12 + month
+
+    for line in experience_lines:
+        month_match = month_range_pattern.search(line)
+
+        if month_match:
+            start_month = month_map.get(
+                month_match.group(1).lower()
             )
-        except ValueError:
-            pass
+            start_year = int(
+                month_match.group(2)
+            )
+            end_month_text = (
+                month_match.group(3).lower()
+            )
+            end_year_text = month_match.group(4)
 
-    if len(years) >= 2:
-        years = sorted(set(years))
+            if not start_month:
+                continue
 
-        span = years[-1] - years[0]
+            start_value = to_month(
+                start_year,
+                start_month,
+            )
 
-        if 0 < span <= 30:
-            return span
+            if end_month_text in {
+                "present",
+                "current",
+                "now",
+            }:
+                end_value = current_month
+            else:
+                end_month = month_map.get(
+                    end_month_text
+                )
 
-    return 0
+                if not end_month:
+                    continue
 
+                end_year = (
+                    int(end_year_text)
+                    if end_year_text
+                    else start_year
+                )
+
+                end_value = to_month(
+                    end_year,
+                    end_month,
+                )
+
+            if end_value >= start_value:
+                intervals.append(
+                    (
+                        start_value,
+                        end_value,
+                    )
+                )
+
+            # Do not also treat the same line as a bare year range.
+            continue
+
+        year_match = year_range_pattern.search(line)
+
+        if year_match:
+            start_year = int(
+                year_match.group(1)
+            )
+            end_text = year_match.group(2).lower()
+
+            start_value = to_month(
+                start_year,
+                1,
+            )
+
+            if end_text in {
+                "present",
+                "current",
+                "now",
+            }:
+                end_value = current_month
+            else:
+                end_value = to_month(
+                    int(end_text),
+                    12,
+                )
+
+            if end_value >= start_value:
+                intervals.append(
+                    (
+                        start_value,
+                        end_value,
+                    )
+                )
+
+    if not intervals:
+        return 0.0
+
+    intervals.sort()
+
+    merged = [
+        intervals[0]
+    ]
+
+    for start, end in intervals[1:]:
+        last_start, last_end = merged[-1]
+
+        if start <= last_end + 1:
+            merged[-1] = (
+                last_start,
+                max(last_end, end),
+            )
+        else:
+            merged.append(
+                (
+                    start,
+                    end,
+                )
+            )
+
+    total_months = sum(
+        end - start + 1
+        for start, end in merged
+    )
+
+    return round(
+        total_months / 12.0,
+        1,
+    )
 
 # ============================================================
 # EXPERIENCE SCORE
@@ -796,14 +1096,24 @@ def calculate_structure_score(
 # SEMANTIC SCORE — FULLY OFFLINE
 # ============================================================
 
-def _local_tfidf_similarity(resume_text: str, job_description: str) -> float:
-    """Fast local semantic approximation; never downloads a model."""
+def _local_tfidf_similarity(
+    resume_text: str,
+    job_description: str,
+) -> float:
+    """
+    Calculate lexical similarity without downloading an external model.
+
+    TF-IDF is intentionally only one signal; short JD/resume pairs can have
+    low raw cosine similarity even when the underlying job responsibilities
+    are clearly related.
+    """
     try:
         from sklearn.feature_extraction.text import TfidfVectorizer
         from sklearn.metrics.pairwise import cosine_similarity
 
         resume = str(resume_text or "").strip()
         jd = str(job_description or "").strip()
+
         if not resume or not jd:
             return 0.0
 
@@ -814,11 +1124,270 @@ def _local_tfidf_similarity(resume_text: str, job_description: str) -> float:
             min_df=1,
             sublinear_tf=True,
         )
-        matrix = vectorizer.fit_transform([resume, jd])
-        value = float(cosine_similarity(matrix[0:1], matrix[1:2])[0][0])
-        return max(0.0, min(100.0, value * 100.0))
+
+        matrix = vectorizer.fit_transform(
+            [resume, jd]
+        )
+
+        value = float(
+            cosine_similarity(
+                matrix[0:1],
+                matrix[1:2],
+            )[0][0]
+        )
+
+        return max(
+            0.0,
+            min(100.0, value * 100.0),
+        )
+
     except Exception:
-        return calculate_keyword_score(resume_text, job_description)
+        return calculate_keyword_score(
+            resume_text,
+            job_description,
+        )
+
+
+def _keyword_overlap_similarity(
+    resume_text: str,
+    job_description: str,
+) -> float:
+    """
+    Estimate meaningful vocabulary overlap while ignoring common stop words.
+    """
+    resume_tokens = set(
+        _tokenize(resume_text)
+    )
+    jd_tokens = set(
+        _tokenize(job_description)
+    )
+
+    if not jd_tokens:
+        return 100.0
+
+    matched = resume_tokens.intersection(
+        jd_tokens
+    )
+
+    return round(
+        len(matched) / len(jd_tokens) * 100.0,
+        2,
+    )
+
+
+def _responsibility_semantic_score(
+    resume_text: str,
+    job_description: str,
+) -> float:
+    """
+    Estimate semantic alignment by checking job responsibilities against
+    concepts actually evidenced in the resume.
+
+    This is deliberately conservative and rewards related implementation,
+    debugging, testing, documentation, development and delivery evidence
+    without inventing skills.
+    """
+    resume = _concept_key(resume_text)
+    jd = str(job_description or "")
+
+    if not resume or not jd:
+        return 0.0
+
+    # Concept families intentionally focused on software-development work.
+    concept_families = {
+        "software development": {
+            "software development",
+            "application development",
+            "web development",
+            "development",
+            "built",
+            "building",
+            "developed",
+            "applications",
+            "projects",
+        },
+        "end to end": {
+            "end-to-end",
+            "end to end",
+            "requirements gathering",
+            "development",
+            "testing",
+            "post-delivery support",
+        },
+        "debugging": {
+            "debug",
+            "debugging",
+            "troubleshooting",
+            "issue resolution",
+            "problem solving",
+        },
+        "testing": {
+            "test",
+            "testing",
+            "uat",
+            "validation",
+        },
+        "documentation": {
+            "documentation",
+            "documented",
+            "technical documentation",
+        },
+        "programming": {
+            "programming",
+            "java",
+            "python",
+            "javascript",
+            "web development",
+        },
+        "databases": {
+            "database",
+            "databases",
+            "mysql",
+            "mongodb",
+            "oracle",
+            "sql",
+            "jdbc",
+        },
+        "tools and technologies": {
+            "tools",
+            "technologies",
+            "jira",
+            "visual studio code",
+            "eclipse",
+            "apache tomcat",
+            "mongodb compass",
+        },
+        "continuous improvement": {
+            "enhancements",
+            "improve",
+            "improved",
+            "troubleshooting",
+            "validation",
+            "enhancements and post-delivery support",
+        },
+        "collaboration/client delivery": {
+            "client",
+            "client support",
+            "client onboarding",
+            "requirements gathering",
+            "cross-functional",
+            "team",
+        },
+    }
+
+    responsibility_lines = []
+    for raw_line in jd.splitlines():
+        line = raw_line.strip(" -•\t")
+        if len(line) < 18:
+            continue
+
+        lowered = line.lower()
+
+        # Ignore headers and hashtag/social boilerplate.
+        if lowered.startswith(("role:", "location:", "why join us:")):
+            continue
+        if lowered.startswith(("#hiring", "#softwaredeveloper")):
+            continue
+
+        if any(
+            marker in lowered
+            for marker in (
+                "design, build",
+                "collaborate",
+                "write clean",
+                "debug, test",
+                "learn new tools",
+                "solid understanding",
+                "familiarity with",
+                "strong communication",
+                "teamwork",
+                "degree in",
+            )
+        ):
+            responsibility_lines.append(
+                lowered
+            )
+
+    if not responsibility_lines:
+        return 0.0
+
+    scored = []
+
+    def family_present(family):
+        return any(
+            re.search(
+                r"(?<![a-z0-9])"
+                + re.escape(
+                    _concept_key(alias)
+                )
+                + r"(?![a-z0-9])",
+                resume,
+                flags=re.IGNORECASE,
+            )
+            for alias in concept_families[family]
+            if _concept_key(alias)
+        )
+
+    for line in responsibility_lines:
+        hits = 0
+        possible = 0
+
+        checks = []
+
+        if "design" in line or "build" in line or "application" in line:
+            checks.append("software development")
+
+        if "end-to-end" in line or "end to end" in line or "collaborate" in line:
+            checks.append("end to end")
+            checks.append("collaboration/client delivery")
+
+        if "clean" in line or "documented code" in line or "well-documented" in line:
+            checks.append("programming")
+            checks.append("documentation")
+
+        if "debug" in line or "test" in line or "improve" in line:
+            checks.append("debugging")
+            checks.append("testing")
+            checks.append("continuous improvement")
+
+        if "tools" in line or "technologies" in line:
+            checks.append("tools and technologies")
+
+        if "programming fundamentals" in line or "language" in line:
+            checks.append("programming")
+
+        if "communication" in line:
+            checks.append("collaboration/client delivery")
+
+        if "teamwork" in line:
+            checks.append("collaboration/client delivery")
+
+        if "degree" in line or "computer science" in line:
+            checks.append("programming")
+
+        # Deduplicate checks for a clean denominator.
+        checks = list(dict.fromkeys(checks))
+
+        if not checks:
+            continue
+
+        possible = len(checks)
+
+        for family in checks:
+            if family_present(family):
+                hits += 1
+
+        scored.append(
+            hits / possible * 100.0
+        )
+
+    if not scored:
+        return 0.0
+
+    return round(
+        sum(scored) / len(scored),
+        2,
+    )
 
 
 def _local_skill_similarity(
@@ -826,17 +1395,51 @@ def _local_skill_similarity(
     job_skills: Optional[List[str]],
     resume_text: str = "",
 ) -> float:
+    """
+    Calculate explicit JD-skill coverage conservatively.
+
+    Single-letter languages are only counted when the resume explicitly
+    identifies them as skills or clearly states programming experience.
+    """
     if not job_skills:
         return 100.0
 
+    unique_job_skills = _coerce_skill_list(
+        job_skills
+    )
+
     matched = 0
-    for job_skill in _unique_skills(job_skills):
-        if any(_skills_match(resume_skill, job_skill) for resume_skill in (resume_skills or [])):
-            matched += 1
-        elif resume_text and _text_has_concept(resume_text, job_skill):
+
+    for job_skill in unique_job_skills:
+        found = False
+
+        for resume_skill in _coerce_skill_list(resume_skills):
+            if _skills_match(
+                resume_skill,
+                job_skill,
+            ):
+                found = True
+                break
+
+        if (
+            not found
+            and resume_text
+            and _text_has_concept(
+                resume_text,
+                job_skill,
+            )
+        ):
+            found = True
+
+        if found:
             matched += 1
 
-    return round(matched / len(_unique_skills(job_skills)) * 100.0, 2)
+    return round(
+        matched
+        / len(unique_job_skills)
+        * 100.0,
+        2,
+    )
 
 
 def calculate_semantic_score(
@@ -845,14 +1448,47 @@ def calculate_semantic_score(
     resume_skills: Optional[List[str]] = None,
     job_skills: Optional[List[str]] = None,
 ) -> float:
-    """Calculate local semantic relevance without Hugging Face or model downloads."""
-    text_score = _local_tfidf_similarity(resume_text, job_description)
-    skill_context_score = _local_skill_similarity(resume_skills, job_skills, resume_text)
+    """
+    Calculate a balanced semantic relevance score.
 
-    # Text similarity captures context; skill-context similarity makes
-    # explicit JD competencies matter without allowing exact keywords alone
-    # to dominate the score.
-    return round(text_score * 0.70 + skill_context_score * 0.30, 2)
+    Signals:
+      - lexical similarity: 20%
+      - meaningful vocabulary overlap: 15%
+      - job-responsibility concept coverage: 50%
+      - explicit skill context: 15%
+
+    This produces a useful approximation without external embedding models.
+    """
+    tfidf_score = _local_tfidf_similarity(
+        resume_text,
+        job_description,
+    )
+
+    lexical_overlap = _keyword_overlap_similarity(
+        resume_text,
+        job_description,
+    )
+
+    responsibility_score = (
+        _responsibility_semantic_score(
+            resume_text,
+            job_description,
+        )
+    )
+
+    skill_context_score = _local_skill_similarity(
+        resume_skills,
+        job_skills,
+        resume_text,
+    )
+
+    return round(
+        tfidf_score * 0.20
+        + lexical_overlap * 0.10
+        + responsibility_score * 0.55
+        + skill_context_score * 0.15,
+        2,
+    )
 
 
 # ============================================================
@@ -934,13 +1570,21 @@ def calculate_ats_score(
         except Exception:
             resume_skills = []
 
-    resume_skills = _unique_skills(
+    resume_skills = _coerce_skill_list(
         resume_skills
     )
 
     # --------------------------------------------------------
     # JD skills
     # --------------------------------------------------------
+
+    # Defensive guard: a caller must not pass the entire JD text as one
+    # "job skill". Older generic dispatchers sometimes did exactly that.
+    if isinstance(job_skills, str):
+        normalized_job = re.sub(r"\s+", " ", job_skills).strip().lower()
+        normalized_jd = re.sub(r"\s+", " ", job_description).strip().lower()
+        if normalized_job == normalized_jd or len(job_skills.split()) > 40:
+            job_skills = None
 
     if job_skills is None:
         job_skills = (
@@ -971,7 +1615,7 @@ def calculate_ats_score(
         except Exception:
             job_skills = []
 
-    job_skills = _unique_skills(
+    job_skills = _coerce_skill_list(
         job_skills
     )
 
@@ -1088,6 +1732,7 @@ def calculate_ats_score(
         "resume_skills": resume_skills,
         "job_skills": job_skills,
         "required_experience": required_experience,
+        "candidate_experience_years": _extract_resume_experience_years(resume_text),
     }
 
 

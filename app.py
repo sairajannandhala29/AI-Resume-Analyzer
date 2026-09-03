@@ -1,4 +1,4 @@
-import os
+﻿import os
 import re
 import inspect
 import tempfile
@@ -1078,10 +1078,16 @@ if ats_analysis:
     # Top requirement cards
     # ------------------------------------------------------------
 
-    job_title = (
-        str(jd_view.get("job_title") or "").strip()
-        or "Not detected"
-    )
+    job_title = str(jd_view.get("job_title") or "").strip()
+    job_title = re.split(
+        r"\bexperience\b\s*[:\-–—]?",
+        job_title,
+        maxsplit=1,
+        flags=re.IGNORECASE,
+    )[0].strip(" -:|,;")
+
+    if not job_title:
+        job_title = "Not detected"
 
     # Prefer the explicit JD text for ranges such as "2 to 4 years".
     # The displayed range is preserved, while the LOWER bound is used
@@ -1093,77 +1099,96 @@ if ats_analysis:
         ) or ""
     )
 
-    experience_label = "Not specified"
+    experience_label = "Not specified by employer"
     experience_min_from_range = None
     experience_max_from_range = None
 
-    # Detect common experience-range formats:
+    # Extract ranges such as:
+    # 0–3 years
+    # 0-3 years
     # 2 to 4 years
-    # 2-4 years
-    # 2–4 years
-    # 2—4 years
     experience_match = re.search(
-        r"\b(\d+)\s*(?:to|-|\u2013|\u2014)\s*(\d+)\s*years?\b",
+        r"(?:experience\s*:\s*)?(\d+(?:\.\d+)?)\s*(?:to|-|–|—)\s*(\d+(?:\.\d+)?)\s*years?",
         jd_source_text,
         flags=re.IGNORECASE,
     )
 
     if experience_match:
-        experience_min_from_range = float(
-            experience_match.group(1)
-        )
-        experience_max_from_range = float(
-            experience_match.group(2)
-        )
-
+        experience_min_from_range = float(experience_match.group(1))
+        experience_max_from_range = float(experience_match.group(2))
         experience_label = (
-            f"{int(experience_min_from_range)}\u2013"
-            f"{int(experience_max_from_range)} years"
+            f"{experience_min_from_range:g}–"
+            f"{experience_max_from_range:g} years"
         )
     else:
-        experience_years = jd_view.get(
-            "experience_years"
+        # Fallback specifically for phrases like:
+        # Experience: 0–3 years (Freshers encouraged to apply)
+        experience_match = re.search(
+            r"\bexperience\b[^\d]{0,30}"
+            r"(\d+(?:\.\d+)?)\s*(?:to|-|–|—)\s*"
+            r"(\d+(?:\.\d+)?)\s*years?",
+            jd_source_text,
+            flags=re.IGNORECASE,
         )
 
-        if experience_years not in (
-            None,
-            "",
-            0,
-        ):
-            try:
-                experience_value = float(
-                    experience_years
-                )
-            except (TypeError, ValueError):
-                experience_value = 0.0
+        if experience_match:
+            experience_min_from_range = float(experience_match.group(1))
+            experience_max_from_range = float(experience_match.group(2))
+            experience_label = (
+                f"{experience_min_from_range:g}–"
+                f"{experience_max_from_range:g} years"
+            )
+        else:
+            # Single minimum such as 2+ years / minimum 2 years
+            minimum_match = re.search(
+                r"\b(?:minimum(?:\s+of)?|at\s+least|required)\s+"
+                r"(\d+(?:\.\d+)?)\s*\+?\s*years?\b",
+                jd_source_text,
+                flags=re.IGNORECASE,
+            )
 
-            if experience_value > 0:
-                experience_label = (
-                    f"{int(experience_value) if experience_value.is_integer() else experience_value:g}+ years"
-                )
+            plus_match = re.search(
+                r"\b(\d+(?:\.\d+)?)\s*\+\s*years?\b",
+                jd_source_text,
+                flags=re.IGNORECASE,
+            )
+
+            if minimum_match:
+                minimum_value = float(minimum_match.group(1))
+                experience_min_from_range = minimum_value
+                experience_label = f"{minimum_value:g}+ years"
+            elif plus_match:
+                minimum_value = float(plus_match.group(1))
+                experience_min_from_range = minimum_value
+                experience_label = f"{minimum_value:g}+ years"
+            else:
+                try:
+                    experience_value = float(
+                        jd_view.get("experience_years", 0) or 0
+                    )
+                except (TypeError, ValueError):
+                    experience_value = 0.0
+
+                if experience_value > 0:
+                    experience_min_from_range = experience_value
+                    experience_label = f"{experience_value:g}+ years"
 
     # ------------------------------------------------------------
     # EXPERIENCE ELIGIBILITY
     # ------------------------------------------------------------
 
-    # Use the lower bound of an explicit JD range as the minimum
-    # requirement. This preserves correct logic for "2 to 4 years":
-    # 0-1 years -> Not Eligible
-    # 2+ years  -> Eligible
     if experience_min_from_range is not None:
-        minimum_experience = experience_min_from_range
+        minimum_experience = float(experience_min_from_range)
     else:
-        minimum_experience = jd_view.get(
-            "experience_years",
-            0,
-        )
-
         try:
             minimum_experience = float(
-                minimum_experience or 0
+                jd_view.get("experience_years", 0) or 0
             )
         except (TypeError, ValueError):
             minimum_experience = 0.0
+
+    # ------------------------------------------------------------    # CANDIDATE EXPERIENCE
+    # ------------------------------------------------------------
 
     candidate_experience = 0.0
 
@@ -1172,26 +1197,36 @@ if ats_analysis:
             _extract_resume_experience_years,
         )
 
-        candidate_experience = (
+        candidate_experience = float(
             _extract_resume_experience_years(
                 st.session_state.get(
                     "resume_text",
                     "",
                 )
-            )
-        )
-
-        candidate_experience = float(
-            candidate_experience or 0
+            ) or 0
         )
     except (ImportError, TypeError, ValueError):
         candidate_experience = 0.0
     except Exception:
-        # Keep the UI stable if the resume parser cannot determine
-        # experience from an unusual resume format.
         candidate_experience = 0.0
 
-    if minimum_experience > 0:
+    # ------------------------------------------------------------
+    # EXPERIENCE STATUS
+    # ------------------------------------------------------------
+
+    has_experience_requirement = (
+        experience_min_from_range is not None
+        or experience_max_from_range is not None
+    )
+
+    if has_experience_requirement:
+        if candidate_experience >= minimum_experience:
+            experience_eligibility = "Eligible"
+            experience_eligibility_icon = "✓"
+        else:
+            experience_eligibility = "Not Eligible"
+            experience_eligibility_icon = "✗"
+    elif minimum_experience > 0:
         if candidate_experience >= minimum_experience:
             experience_eligibility = "Eligible"
             experience_eligibility_icon = "✓"
@@ -1199,8 +1234,12 @@ if ats_analysis:
             experience_eligibility = "Not Eligible"
             experience_eligibility_icon = "✗"
     else:
-        experience_eligibility = "Not specified"
-        experience_eligibility_icon = "i"
+        experience_eligibility = "Not applicable"
+        experience_eligibility_icon = "—"
+
+    # ------------------------------------------------------------
+    # EDUCATION
+    # ------------------------------------------------------------
 
     education_values = jd_view.get(
         "education",
@@ -1209,11 +1248,9 @@ if ats_analysis:
 
     education_label = "Not specified"
 
-    if isinstance(
-        education_values,
-        (list, tuple),
-    ):
+    if isinstance(education_values, (list, tuple)):
         education_clean = []
+
         for value in education_values:
             value = str(value).strip()
             if not value:
@@ -1226,147 +1263,68 @@ if ats_analysis:
                 education_clean.append(value)
 
         if education_clean:
-            # Collapse common duplicate tokens such as bachelor / bachelor's / degree
-            if any(
-                "bachelor" in item.lower()
-                for item in education_clean
-            ):
+            if any("bachelor" in item.lower() for item in education_clean):
                 education_label = "Bachelor's degree"
             else:
-                education_label = " / ".join(
-                    education_clean[:3]
-                ).title()
+                education_label = " / ".join(education_clean[:3]).title()
 
+    # Create columns before using card1/card2/card3.
     card1, card2, card3 = st.columns(3)
 
     with card1:
         st.markdown(
-            f"""
-            <div style="
-                border:1px solid #e4e7ec;
-                border-radius:14px;
-                padding:18px;
-                min-height:105px;
-                background:#ffffff;
-            ">
-                <div style="
-                    color:#667085;
-                    font-size:13px;
-                    font-weight:700;
-                    text-transform:uppercase;
-                    letter-spacing:.04em;
-                ">Job Title</div>
-                <div style="
-                    color:#101828;
-                    font-size:19px;
-                    font-weight:700;
-                    margin-top:7px;
-                ">{job_title}</div>
+            textwrap.dedent(f"""
+            <div style="border:1px solid #e4e7ec; border-radius:14px; padding:18px; min-height:105px; background:#ffffff;">
+                <div style="color:#667085; font-size:13px; font-weight:700; text-transform:uppercase; letter-spacing:.04em;">Job Title</div>
+                <div style="color:#101828; font-size:19px; font-weight:700; margin-top:7px;">{job_title}</div>
             </div>
-            """,
+            """).strip(),
             unsafe_allow_html=True,
         )
 
     with card2:
+        minimum_html = ""
+        if minimum_experience > 0:
+            minimum_html = (
+                '<div style="color:#667085;font-size:12px;font-weight:700;'
+                'margin-top:20px;text-transform:uppercase;">MINIMUM REQUIRED</div>'
+                f'<div style="color:#101828;font-size:15px;font-weight:700;margin-top:5px;">'
+                f'{minimum_experience:g} years</div>'
+            )
+
+        experience_card_html = (
+            '<div style="border:1px solid #e4e7ec;border-radius:14px;padding:20px;'
+            'min-height:250px;background:#ffffff;">'
+            '<div style="color:#667085;font-size:13px;font-weight:700;'
+            'text-transform:uppercase;letter-spacing:.04em;">EXPERIENCE</div>'
+            f'<div style="color:#101828;font-size:21px;font-weight:700;margin-top:8px;">'
+            f'{experience_label}</div>'
+            f'{minimum_html}'
+            '<div style="color:#667085;font-size:12px;font-weight:700;'
+            'margin-top:20px;text-transform:uppercase;">YOUR EXPERIENCE</div>'
+            f'<div style="color:#101828;font-size:15px;font-weight:700;margin-top:5px;">'
+            f'~{candidate_experience:g} years</div>'
+            '<div style="color:#667085;font-size:12px;font-weight:700;'
+            'margin-top:20px;text-transform:uppercase;">ELIGIBILITY</div>'
+            f'<div style="color:#101828;font-size:15px;font-weight:700;margin-top:5px;">'
+            f'{experience_eligibility_icon} {experience_eligibility}</div>'
+            '</div>'
+        )
+
         st.markdown(
-            textwrap.dedent(
-                f"""
-                <div style="
-                    border:1px solid #e4e7ec;
-                    border-radius:14px;
-                    padding:18px;
-                    min-height:280px;
-                    background:#ffffff;
-                ">
-            <div style="
-                color:#667085;
-                font-size:13px;
-                font-weight:700;
-                text-transform:uppercase;
-                letter-spacing:.04em;
-            ">Experience Required</div>
-
-            <div style="
-                color:#101828;
-                font-size:19px;
-                font-weight:700;
-                margin-top:7px;
-            ">{experience_label}</div>
-
-            <div style="
-                color:#667085;
-                font-size:12px;
-                font-weight:600;
-                margin-top:16px;
-            ">MINIMUM REQUIRED</div>
-
-            <div style="
-                color:#101828;
-                font-size:15px;
-                font-weight:700;
-                margin-top:4px;
-            ">{minimum_experience:g} years</div>
-
-            <div style="
-                color:#667085;
-                font-size:12px;
-                font-weight:600;
-                margin-top:16px;
-            ">YOUR EXPERIENCE</div>
-
-            <div style="
-                color:#101828;
-                font-size:15px;
-                font-weight:700;
-                margin-top:4px;
-            ">{candidate_experience:g} years</div>
-
-            <div style="
-                color:#667085;
-                font-size:12px;
-                font-weight:600;
-                margin-top:16px;
-            ">ELIGIBILITY</div>
-
-            <div style="
-                color:#101828;
-                font-size:15px;
-                font-weight:700;
-                margin-top:4px;
-            ">
-                {experience_eligibility_icon} {experience_eligibility}
-            </div>
-                </div>
-                """
-            ),
+            experience_card_html,
             unsafe_allow_html=True,
         )
 
+
     with card3:
         st.markdown(
-            f"""
-            <div style="
-                border:1px solid #e4e7ec;
-                border-radius:14px;
-                padding:18px;
-                min-height:105px;
-                background:#ffffff;
-            ">
-                <div style="
-                    color:#667085;
-                    font-size:13px;
-                    font-weight:700;
-                    text-transform:uppercase;
-                    letter-spacing:.04em;
-                ">Education</div>
-                <div style="
-                    color:#101828;
-                    font-size:19px;
-                    font-weight:700;
-                    margin-top:7px;
-                ">{education_label}</div>
+            textwrap.dedent(f"""
+            <div style="border:1px solid #e4e7ec; border-radius:14px; padding:18px; min-height:105px; background:#ffffff;">
+                <div style="color:#667085; font-size:13px; font-weight:700; text-transform:uppercase; letter-spacing:.04em;">Education</div>
+                <div style="color:#101828; font-size:19px; font-weight:700; margin-top:7px;">{education_label}</div>
             </div>
-            """,
+            """).strip(),
             unsafe_allow_html=True,
         )
 
@@ -1429,7 +1387,7 @@ if ats_analysis:
                 )
 
                 st.markdown(
-                    f"""
+                    textwrap.dedent(f"""
                     <div style="
                         border:1px solid #eaecf0;
                         border-radius:12px;
@@ -1447,7 +1405,7 @@ if ats_analysis:
                         ">{label}</div>
                         <div>{skill_html}</div>
                     </div>
-                    """,
+                    """).strip(),
                     unsafe_allow_html=True,
                 )
     else:
@@ -1491,7 +1449,7 @@ if ats_analysis:
 
     with match_col:
         st.markdown(
-            f"""
+            textwrap.dedent(f"""
             <div style="
                 border:1px solid #abefc6;
                 border-radius:12px;
@@ -1510,13 +1468,13 @@ if ats_analysis:
                     for skill in matched_for_display
                 ) or '<span style="color:#667085;">No direct matches detected.</span>'}
             </div>
-            """,
+            """).strip(),
             unsafe_allow_html=True,
         )
 
     with missing_col:
         st.markdown(
-            f"""
+            textwrap.dedent(f"""
             <div style="
                 border:1px solid #fecdca;
                 border-radius:12px;
@@ -1535,7 +1493,7 @@ if ats_analysis:
                     for skill in missing_for_display
                 ) or '<span style="color:#067647;">All detected JD skills are present.</span>'}
             </div>
-            """,
+            """).strip(),
             unsafe_allow_html=True,
         )
 
@@ -1583,7 +1541,7 @@ if ats_analysis:
             start=1,
         ):
             st.markdown(
-                f"""
+                textwrap.dedent(f"""
                 <div style="
                     border-left:4px solid #d0d5dd;
                     padding:10px 14px;
@@ -1594,7 +1552,7 @@ if ats_analysis:
                 ">
                     <strong>{index}.</strong>&nbsp; {responsibility}
                 </div>
-                """,
+                """).strip(),
                 unsafe_allow_html=True,
             )
     else:
@@ -1602,9 +1560,6 @@ if ats_analysis:
             "No specific responsibilities were detected."
         )
 
-    # Raw JSON remains available only for debugging/development.
-    with st.expander("🔧 Developer details — raw JD analysis"):
-        st.json(jd_view)
 
     st.subheader("💪 Resume Strengths")
 
@@ -1913,73 +1868,6 @@ if st.session_state.optimized_result:
             "⚠️ Factual validation did not pass."
         )
 
-        with st.expander(
-            "🔍 Factual validation details",
-            expanded=True,
-        ):
-            st.write(
-                "Unsupported skills:",
-                validation.get(
-                    "unsupported_skills",
-                    [],
-                ),
-            )
-
-            st.write(
-                "Unsupported numbers:",
-                validation.get(
-                    "unsupported_numbers",
-                    [],
-                ),
-            )
-
-            st.write(
-                "Unsupported years:",
-                validation.get(
-                    "unsupported_years",
-                    [],
-                ),
-            )
-
-            st.write(
-                "Unsupported dates:",
-                validation.get(
-                    "unsupported_dates",
-                    [],
-                ),
-            )
-
-            st.write(
-                "Unsupported companies:",
-                validation.get(
-                    "unsupported_companies",
-                    [],
-                ),
-            )
-
-            st.write(
-                "New named terms:",
-                validation.get(
-                    "new_named_terms",
-                    [],
-                ),
-            )
-
-            st.write(
-                "Text overlap:",
-                validation.get(
-                    "text_overlap",
-                    0,
-                ),
-            )
-
-            st.write(
-                "Warnings:",
-                validation.get(
-                    "warnings",
-                    [],
-                ),
-            )
 
     # Original ATS analysis is guaranteed to be a dict after a successful
     # analysis, but protect the UI from stale/empty session state.
@@ -2207,7 +2095,7 @@ if (
         st.session_state.optimized_error
     )
 st.markdown(
-    """
+    textwrap.dedent("""
     <div style="
         text-align: center;
         margin-top: 40px;
@@ -2218,6 +2106,6 @@ st.markdown(
     ">
         Developed by <strong>Sai Rajan Nandhala</strong>
     </div>
-    """,
+    """).strip(),
     unsafe_allow_html=True,
 )
